@@ -12,6 +12,7 @@ import { down, makeController, move, sample, up } from "./helpers";
 
 function mockCtx() {
   const moveToCalls: [number, number][] = [];
+  const transforms: number[][] = [];
   const ctx: CtxLike = {
     setTransform: () => {},
     clearRect: () => {},
@@ -19,6 +20,7 @@ function mockCtx() {
     restore: () => {},
     translate: () => {},
     scale: () => {},
+    transform: (...args: number[]) => transforms.push(args),
     beginPath: () => {},
     moveTo: (x, y) => {
       moveToCalls.push([x, y]);
@@ -31,7 +33,7 @@ function mockCtx() {
     lineWidth: 0,
     globalAlpha: 1,
   };
-  return { ctx, moveToCalls };
+  return { ctx, moveToCalls, transforms };
 }
 
 describe("坐标变换", () => {

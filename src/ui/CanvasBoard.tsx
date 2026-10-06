@@ -35,6 +35,13 @@ export function CanvasBoard() {
   const styleRef = useRef({ color, baseWidth });
   styleRef.current = { color, baseWidth };
   const renderRef = useRef<() => void>(() => {});
+  // 选择集合的同步镜像：渲染回调（document 未变化时也要刷新高亮）读取它
+  const selectionRef = useRef<ReadonlySet<string>>(new Set());
+  const setSelectionAndRender = (ids: string[]) => {
+    selectionRef.current = new Set(ids);
+    setSelection(ids);
+    renderRef.current();
+  };
 
   const [ctrl] = useState(
     () =>
@@ -76,6 +83,7 @@ export function CanvasBoard() {
           active: ctrl.getActivePoints(),
           preview: ctrl.getPreviewPoints(),
           activeStyle: styleRef.current,
+          selectedIds: selectionRef.current,
         });
       });
     };
@@ -86,6 +94,13 @@ export function CanvasBoard() {
     const unsub = doc.onEdit(() => {
       setPointCount(doc.totalPoints);
       setCanUndo(doc.canUndo);
+      // 变换/擦除/撤销后剔除已不存在的选择，避免后续变换命中失效对象
+      const current = [...selectionRef.current];
+      const alive = current.filter((id) => doc.hasStroke(id));
+      if (alive.length !== current.length) {
+        selectionRef.current = new Set(alive);
+        setSelection(alive);
+      }
       render();
     });
     return () => {
@@ -112,7 +127,7 @@ export function CanvasBoard() {
         e.clientX - box.left,
         e.clientY - box.top,
       );
-      setSelection(
+      setSelectionAndRender(
         doc
           .getStrokes()
           .filter((s) => containsStroke(s, p.x, p.y))
@@ -224,7 +239,11 @@ export function CanvasBoard() {
     <>
       <div className="toolbar">
         <button onClick={() => setTool("select")}>选择笔画</button>
-        <button onClick={() => setSelection(doc.getStrokes().map((s) => s.id))}>
+        <button
+          onClick={() =>
+            setSelectionAndRender(doc.getStrokes().map((s) => s.id))
+          }
+        >
           全选
         </button>
         <input
@@ -234,11 +253,25 @@ export function CanvasBoard() {
         />
         <button
           onClick={() => {
+            // 先剔除失效选择；剩余为空则什么都不做（不产生编辑/撤销记录）
+            const ids = selection.filter((id) => doc.hasStroke(id));
+            if (ids.length === 0) {
+              setAffineError("");
+              return;
+            }
+            let value: unknown;
             try {
-              doc.transformStrokes(selection, JSON.parse(affineText));
+              value = JSON.parse(affineText);
+            } catch {
+              setAffineError("矩阵不是合法 JSON");
+              return;
+            }
+            try {
+              // 模型保证原子性：非法/失效/重复选择时整次拒绝，不留部分变化
+              doc.transformStrokes(ids, value);
               setAffineError("");
             } catch (e) {
-              setAffineError(String(e));
+              setAffineError(String(e instanceof Error ? e.message : e));
             }
           }}
         >

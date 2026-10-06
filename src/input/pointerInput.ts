@@ -1,6 +1,6 @@
 import { Document, MAX_DOCUMENT_POINTS } from "../model/document";
+import { hitEraseStroke } from "../model/affine";
 import {
-  hitStroke,
   screenToWorld,
   type ViewTransform,
 } from "../model/geometry";
@@ -173,7 +173,7 @@ export class PointerInputController {
     const w = screenToWorld(view, raw.x, raw.y);
     const radius = this.hooks.eraserRadiusPx / view.scale;
     for (const s of this.doc.getStrokes()) {
-      if (hitStroke(s.points, s.style, w.x, w.y, radius))
+      if (hitEraseStroke(s, w.x, w.y, radius))
         this.doc.eraseStroke(s.id);
     }
   }

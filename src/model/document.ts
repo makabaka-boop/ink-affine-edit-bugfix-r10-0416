@@ -1,4 +1,10 @@
-import { compose, identity, matrix, type Matrix } from "./affine";
+import {
+  compose,
+  identity,
+  isIdentity,
+  matrix,
+  type Matrix,
+} from "./affine";
 import type { Sample, Stroke, StrokeStyle } from "./types";
 
 /** 单份文档采样点上限。 */
@@ -7,14 +13,17 @@ export const MAX_DOCUMENT_POINTS = 20000;
 export type EditOp =
   | { type: "add"; strokeId: string }
   | { type: "erase"; entries: { stroke: Stroke; index: number }[] }
-  | { type: "transform"; entries: { strokeId: string; before: Matrix }[] };
+  | {
+      type: "transform";
+      entries: { strokeId: string; before: Matrix | undefined }[];
+    };
 
 /**
  * 文档模型：笔画集合 + 撤销栈 + 编辑代次。
  *
- * - editGen 在每次可撤销编辑（提交笔画、结束一次擦除、撤销）时递增；
+ * - editGen 在每次可撤销编辑（提交笔画、结束一次擦除、笔画变换、撤销）时递增；
  *   Worker 平滑结果携带 (strokeId, gen)，仅当 gen 与当前 editGen 一致
- *   且笔画仍存在时才被接受，旧结果无法复活已擦除的笔画。
+ *   且笔画仍存在时才被接受，旧结果无法覆盖新编辑或复活已擦除的笔画。
  * - applySmoothed 不是可撤销编辑，不推进 editGen，也不改动保存的采样。
  */
 export class Document {
@@ -118,18 +127,47 @@ export class Document {
     }
   }
 
-  transformStrokes(ids: string[], value: unknown): void {
-    const m = matrix(value);
-    const entries: { strokeId: string; before: Matrix }[] = [];
+  /**
+   * 对一组选中笔画施加同一仿射矩阵：新矩阵在世界坐标中左乘每笔已有矩阵，
+   * 原始采样/压力/时间不动（始终留在笔画局部坐标）。
+   *
+   * 原子性保证 —— 以下任一情况都拒绝整次编辑，不留下任何部分变化：
+   * - 空选择：不是编辑，不进撤销栈、不推进代次，返回 false；
+   * - 选择含重复 id 或已不存在的笔画（失效选择）；
+   * - 输入矩阵非法，或与某笔已有矩阵合成后越界/奇异。
+   * 全部校验与合成结果先算好后才统一写入，一次合法变换 = 一次完整编辑。
+   *
+   * @returns 是否实际产生了编辑。
+   */
+  transformStrokes(ids: string[], value: unknown): boolean {
+    if (ids.length === 0) return false;
+    if (new Set(ids).size !== ids.length)
+      throw new Error("duplicate stroke in selection");
+
+    const m = matrix(value); // 输入矩阵非法时在任何写入前抛出
+    const targets: { stroke: Stroke; next: Matrix | undefined }[] = [];
     for (const id of ids) {
-      const s = this.getStroke(id);
-      if (!s) throw new Error("unknown stroke");
-      entries.push({ strokeId: id, before: [...(s.transform ?? identity())] });
-      s.transform = compose(s.transform ?? identity(), m);
+      const stroke = this.getStroke(id);
+      if (!stroke) throw new Error("unknown stroke in selection");
+      const current = stroke.transform;
+      // 新矩阵左乘已有矩阵；合成后的矩阵仍需通过系数/行列式约束
+      const next = compose(m, current ?? identity());
+      targets.push({ stroke, next: isIdentity(next) ? undefined : next });
+    }
+
+    // 校验全部通过后才写入：失败不可能只改到部分笔画
+    const entries: { strokeId: string; before: Matrix | undefined }[] = [];
+    for (const { stroke, next } of targets) {
+      entries.push({
+        strokeId: stroke.id,
+        before: stroke.transform ? [...stroke.transform] : undefined,
+      });
+      stroke.transform = next;
     }
     this.editGen++;
     this.undoStack.push({ type: "transform", entries });
     this.emit();
+    return true;
   }
 
   undo(): boolean {
@@ -142,12 +180,13 @@ export class Document {
         this.totalPoints -= stroke.points.length;
       }
     } else if (op.type === "transform") {
+      // 恢复每笔变换前的确切矩阵（含“原本无变换”这一状态）
       for (const entry of op.entries) {
         const s = this.getStroke(entry.strokeId);
-        if (s) s.transform = entry.before;
+        if (s) s.transform = entry.before ? [...entry.before] : undefined;
       }
     } else {
-      // 按删除的逆序、以删除时记录的下标插回，恢复原有相对顺序。
+      // 按删除的逆序、以删除时记录的下标插回，恢复原有相对顺序与变换。
       for (const e of [...op.entries].reverse()) {
         const at = Math.min(e.index, this.strokes.length);
         this.strokes.splice(at, 0, e.stroke);
@@ -161,7 +200,8 @@ export class Document {
 
   /**
    * 接收 Worker 平滑结果。代次不符（文档已编辑）或笔画已不存在（已擦除）
-   * 时丢弃；只写 smoothed 缓存，绝不触碰保存的采样 points。
+   * 时丢弃；只写 smoothed 缓存，绝不触碰保存的采样 points。过期结果因此
+   * 无法覆盖变换/撤销之后的新编辑。
    */
   applySmoothed(strokeId: string, gen: number, points: Sample[]): boolean {
     if (gen !== this.editGen) return false;
