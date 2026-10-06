@@ -86,6 +86,11 @@ export function CanvasBoard() {
     const unsub = doc.onEdit(() => {
       setPointCount(doc.totalPoints);
       setCanUndo(doc.canUndo);
+      // 笔画被擦除/撤销后，选择中失效的 id 一并剔除
+      setSelection((prev) => {
+        const kept = prev.filter((id) => doc.hasStroke(id));
+        return kept.length === prev.length ? prev : kept;
+      });
       render();
     });
     return () => {

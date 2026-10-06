@@ -7,7 +7,7 @@
 ```bash
 npm install
 npm run dev      # 开发
-npm test         # 测试（vitest，34 个用例）
+npm test         # 测试（vitest，50 个用例）
 npm run build    # 类型检查 + 生产构建
 ```
 
@@ -15,7 +15,8 @@ npm run build    # 类型检查 + 生产构建
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/model/document.ts` | 笔画集合、撤销栈、编辑代次 `editGen`、两万点上限 |
+| `src/model/document.ts` | 笔画集合、撤销栈、编辑代次 `editGen`、两万点上限、原子仿射编辑 |
+| `src/model/affine.ts` | 仿射矩阵：校验、左乘复合、求逆、世界坐标命中判定 |
 | `src/model/geometry.ts` | 视图变换（缩放/平移）、橡皮命中判定 |
 | `src/input/pointerInput.ts` | 指针状态机：合并事件、预测点、提交/撤销笔画 |
 | `src/input/domAdapter.ts` | PointerEvent → 输入层，`setPointerCapture` |
@@ -42,6 +43,7 @@ npm run build    # 类型检查 + 生产构建
 - `cancel.test.ts`：取消/失去捕获回退、第二指针忽略。
 - `smoothing.test.ts`：代次验收、擦除后旧结果不复活、撤销后按新代次重新平滑。
 - `document.test.ts`：两万点上限截断、撤销释放预算、导出内容、代次推进规则。
+- `affineEdit.test.ts`：矩阵复合顺序、连续变换累积、原子拒绝（失效/重复/非法/空选择）、变换撤销与擦除撤销、变换后选择与橡皮命中、导出含 transform、渲染合成视图×笔画矩阵、平滑代次失效。
 
 
 ## 笔画仿射编辑

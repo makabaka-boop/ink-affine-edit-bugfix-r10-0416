@@ -1,9 +1,6 @@
 import { Document, MAX_DOCUMENT_POINTS } from "../model/document";
-import {
-  hitStroke,
-  screenToWorld,
-  type ViewTransform,
-} from "../model/geometry";
+import { hitStrokeWorld } from "../model/affine";
+import { screenToWorld, type ViewTransform } from "../model/geometry";
 import type { Sample, StrokeStyle } from "../model/types";
 
 /** 屏幕坐标下的原始采样（CSS px）。 */
@@ -167,14 +164,13 @@ export class PointerInputController {
     if (changed) this.hooks.onStateChange();
   }
 
-  /** 橡皮命中判定只针对保存的采样（doc 内的 strokes），预测点不参与。 */
+  /** 橡皮命中判定只针对保存的采样（doc 内的 strokes），预测点不参与；带变换的笔画按其显示位置判定。 */
   private eraseAt(raw: RawSample): void {
     const view = this.hooks.getView();
     const w = screenToWorld(view, raw.x, raw.y);
     const radius = this.hooks.eraserRadiusPx / view.scale;
     for (const s of this.doc.getStrokes()) {
-      if (hitStroke(s.points, s.style, w.x, w.y, radius))
-        this.doc.eraseStroke(s.id);
+      if (hitStrokeWorld(s, w.x, w.y, radius)) this.doc.eraseStroke(s.id);
     }
   }
 }

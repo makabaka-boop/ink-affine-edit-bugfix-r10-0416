@@ -12,7 +12,7 @@ export type EditOp =
 /**
  * 文档模型：笔画集合 + 撤销栈 + 编辑代次。
  *
- * - editGen 在每次可撤销编辑（提交笔画、结束一次擦除、撤销）时递增；
+ * - editGen 在每次可撤销编辑（提交笔画、结束一次擦除、变换、撤销）时递增；
  *   Worker 平滑结果携带 (strokeId, gen)，仅当 gen 与当前 editGen 一致
  *   且笔画仍存在时才被接受，旧结果无法复活已擦除的笔画。
  * - applySmoothed 不是可撤销编辑，不推进 editGen，也不改动保存的采样。
@@ -118,17 +118,32 @@ export class Document {
     }
   }
 
+  /**
+   * 对选中的一批笔画应用仿射变换（新矩阵在世界坐标中左乘已有矩阵）。
+   * 整次编辑是原子的：先校验矩阵与全部选择（重复/不存在的 id 一并拒绝），
+   * 全部通过后才落地；任何失败都不留下部分变化，空选择不产生编辑。
+   * 合法时所有笔画一起更新，合并为一条撤销记录，并推进 editGen ——
+   * 途中的旧平滑结果随之失效，不能覆盖这次新编辑。
+   */
   transformStrokes(ids: string[], value: unknown): void {
-    const m = matrix(value);
-    const entries: { strokeId: string; before: Matrix }[] = [];
+    if (ids.length === 0) return; // 空选择不产生编辑
+    const m = matrix(value); // 非法矩阵：拒绝整次编辑
+    if (new Set(ids).size !== ids.length)
+      throw new Error("duplicate stroke in selection");
+    const targets: { stroke: Stroke; before: Matrix; after: Matrix }[] = [];
     for (const id of ids) {
       const s = this.getStroke(id);
-      if (!s) throw new Error("unknown stroke");
-      entries.push({ strokeId: id, before: [...(s.transform ?? identity())] });
-      s.transform = compose(s.transform ?? identity(), m);
+      if (!s) throw new Error("unknown stroke"); // 不存在的 id：拒绝整次编辑
+      const before = (s.transform ?? identity()).slice() as Matrix;
+      targets.push({ stroke: s, before, after: compose(m, before) });
     }
+    // 全部校验通过后才落地，绝不留下部分变化
+    for (const t of targets) t.stroke.transform = t.after;
     this.editGen++;
-    this.undoStack.push({ type: "transform", entries });
+    this.undoStack.push({
+      type: "transform",
+      entries: targets.map((t) => ({ strokeId: t.stroke.id, before: t.before })),
+    });
     this.emit();
   }
 

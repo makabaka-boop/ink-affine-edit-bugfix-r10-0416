@@ -43,6 +43,9 @@ export interface Scene {
 /**
  * 场景绘制：只读取文档数据，绝不修改保存的采样。
  * 已提交的笔画用平滑缓存（若有）渲染，否则用原始采样。
+ * 带变换的笔画把「视图 × 笔画矩阵」合成进画布变换后直接画局部坐标采样，
+ * 位置与笔尖轮廓一起变形（旋转/错切/非等比缩放下圆头笔尖随之变为椭圆），
+ * 与选择/橡皮的命中判定（逆变换到局部坐标）保持一致。
  */
 export function renderScene(ctx: CtxLike, scene: Scene): void {
   const { width, height, dpr, view } = scene;
@@ -54,20 +57,25 @@ export function renderScene(ctx: CtxLike, scene: Scene): void {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   for (const s of scene.strokes) {
-    const m = s.transform;
     const pts = s.smoothed ?? s.points;
-    drawPolyline(
-      ctx,
-      m
-        ? pts.map((p) => ({
-            ...p,
-            x: m[0] * p.x + m[2] * p.y + m[4],
-            y: m[1] * p.x + m[3] * p.y + m[5],
-          }))
-        : pts,
-      s.style,
-      1,
-    );
+    const m = s.transform;
+    if (m) {
+      // 设备变换 = dpr · 视图平移缩放 · 笔画矩阵
+      const k = dpr * view.scale;
+      ctx.save();
+      ctx.setTransform(
+        k * m[0],
+        k * m[1],
+        k * m[2],
+        k * m[3],
+        k * m[4] + dpr * view.tx,
+        k * m[5] + dpr * view.ty,
+      );
+      drawPolyline(ctx, pts, s.style, 1);
+      ctx.restore();
+    } else {
+      drawPolyline(ctx, pts, s.style, 1);
+    }
   }
   if (scene.active) drawPolyline(ctx, scene.active, scene.activeStyle, 1);
   if (scene.preview) drawPolyline(ctx, scene.preview, scene.activeStyle, 0.5);
